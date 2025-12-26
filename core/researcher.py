@@ -5,20 +5,11 @@ Smart Researcher - OpenAI bilan web search va post yaratish
 from openai import AsyncOpenAI
 from config import OPENAI_API_KEY
 import aiohttp
-import os
+import random
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 # ============ PROMPTLAR ============
-
-SEARCH_SYSTEM_PROMPT = """Sen professional IT tadqiqotchisan. 
-Vazifang: Berilgan mavzu bo'yicha internetdan eng so'nggi va ishonchli ma'lumotlarni topish.
-
-QOIDALAR:
-1. Faqat ishonchli manbalardan foydalaning (rasmiy bloglar, texnik saytlar)
-2. Eng yangi ma'lumotlarni toping (so'nggi 1 hafta/oy)
-3. Har bir fakt uchun manbani yozing
-"""
 
 POST_SYSTEM_PROMPT = """Sen professional IT jurnalistsan va Telegram kanal yuritasan.
 
@@ -42,31 +33,20 @@ Kirish - 1-2 jumla, mavzuni tanishtirish.
 
 #hashtag1 #hashtag2 #hashtag3
 
-FORMATLASH QOIDALARI:
-1. <b>matn</b> - qalin (muhim so'zlar uchun)
-2. <i>matn</i> - kursiv (xulosa, izohlar uchun)
-3. <code>kod</code> - kod yoki buyruqlar uchun
-4. <pre>kod bloki</pre> - katta kod uchun
-
 QOIDALAR:
-1. O'zbek tilida yoz (texnik atamalar inglizcha bo'lishi mumkin)
+1. O'zbek tilida yoz
 2. Sodda va tushunarli til
 3. Faqat berilgan faktlarga asoslan
 4. 150-300 so'z oralig'ida
-5. Kod bo'lsa <code> ichida yoz
-6. Hashtaglar tegishli bo'lsin
+5. Kod bo'lsa <code>kod</code> ichida yoz
 """
 
 COMPARE_SYSTEM_PROMPT = """Sen texnologiya ekspertisan.
-
-VAZIFA: Ikki texnologiyani solishtirish va Telegram uchun post yozish.
 
 FORMAT (Telegram HTML):
 <b>⚔️ TEXNOLOGIYA1 vs TEXNOLOGIYA2</b>
 
 Kirish - nima uchun solishtirmoqdamiz.
-
-<b>📊 Solishtirish:</b>
 
 <b>✅ Texnologiya1 afzalliklari:</b>
 - Afzallik 1
@@ -76,9 +56,8 @@ Kirish - nima uchun solishtirmoqdamiz.
 - Afzallik 1
 - Afzallik 2
 
-<b>🎯 Qachon qaysi birini tanlash kerak:</b>
+<b>🎯 Qachon qaysi birini tanlash:</b>
 - <i>Holat 1</i> → Tanlash
-- <i>Holat 2</i> → Tanlash
 
 <i>💡 Xulosa: Qisqa tavsiya</i>
 
@@ -86,8 +65,6 @@ Kirish - nima uchun solishtirmoqdamiz.
 """
 
 QUICK_SYSTEM_PROMPT = """Sen IT blogger san.
-
-VAZIFA: Berilgan mavzu haqida qisqa, lo'nda post yoz.
 
 FORMAT (Telegram HTML):
 <b>⚡ SARLAVHA</b>
@@ -122,12 +99,6 @@ FORMAT (Telegram HTML):
 #trending #tech #news
 """
 
-# Rasm qidirish uchun prompt
-IMAGE_SEARCH_PROMPT = """Berilgan mavzu uchun rasm qidirish uchun ingliz tilida 2-3 so'zlik kalit so'z ber.
-Faqat kalit so'zni yoz, boshqa hech narsa yozma.
-Masalan: "React 19" uchun → "React logo programming"
-"""
-
 
 class SmartResearcher:
     """OpenAI orqali tadqiqot va post yaratish"""
@@ -137,66 +108,52 @@ class SmartResearcher:
         self.model = "gpt-4o"
 
     async def search_and_analyze(self, query: str) -> dict:
-        """Internetdan qidirish va ma'lumot yig'ish"""
+        """Internetdan qidirish"""
+        try:
+            response = await self.client.responses.create(
+                model=self.model,
+                tools=[{"type": "web_search_preview"}],
+                input=f"""
+                Quyidagi mavzu bo'yicha internetdan eng so'nggi ma'lumotlarni top:
 
-        response = await self.client.responses.create(
-            model=self.model,
-            tools=[{"type": "web_search_preview"}],
-            input=f"""
-            Quyidagi mavzu bo'yicha internetdan eng so'nggi ma'lumotlarni top:
+                MAVZU: {query}
 
-            MAVZU: {query}
+                FORMATDA BER:
+                1. ASOSIY FAKTLAR (kamida 5 ta)
+                2. MANBALAR
+                3. SO'NGGI YANGILIKLAR (sana bilan)
+                """,
+            )
 
-            TOPILGAN MA'LUMOTLARNI QUYIDAGI FORMATDA BER:
-
-            1. ASOSIY FAKTLAR:
-            - [fakt 1]
-            - [fakt 2]
-            - [fakt 3]
-            (kamida 5 ta fakt)
-
-            2. MANBALAR:
-            - [Manba nomi 1]: [qisqa tavsif]
-            - [Manba nomi 2]: [qisqa tavsif]
-
-            3. SO'NGGI YANGILIKLAR:
-            - [yangilik 1 - sana bilan]
-            - [yangilik 2 - sana bilan]
-
-            Faqat ishonchli manbalardan foydalaning!
-            """,
-        )
-
-        return {
-            "query": query,
-            "research": response.output_text,
-            "status": "success"
-        }
+            return {
+                "query": query,
+                "research": response.output_text,
+                "status": "success"
+            }
+        except Exception as e:
+            return {
+                "query": query,
+                "research": "",
+                "status": "error",
+                "error": str(e)
+            }
 
     async def generate_post(self, research_data: dict, post_type: str = "full") -> str:
-        """Tadqiqot natijalariga asoslangan post yaratish"""
+        """Post yaratish"""
 
-        if post_type == "compare":
-            system_prompt = COMPARE_SYSTEM_PROMPT
-        elif post_type == "quick":
-            system_prompt = QUICK_SYSTEM_PROMPT
-        elif post_type == "trending":
-            system_prompt = TRENDING_SYSTEM_PROMPT
-        else:
-            system_prompt = POST_SYSTEM_PROMPT
+        prompts = {
+            "compare": COMPARE_SYSTEM_PROMPT,
+            "quick": QUICK_SYSTEM_PROMPT,
+            "trending": TRENDING_SYSTEM_PROMPT,
+            "full": POST_SYSTEM_PROMPT
+        }
 
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"""
-                Quyidagi tadqiqot natijalari asosida post yoz:
-
-                MAVZU: {research_data['query']}
-
-                TADQIQOT NATIJALARI:
-                {research_data['research']}
-                """}
+                {"role": "system", "content": prompts.get(post_type, POST_SYSTEM_PROMPT)},
+                {"role": "user",
+                 "content": f"MAVZU: {research_data['query']}\n\nMA'LUMOTLAR:\n{research_data['research']}"}
             ],
             temperature=0.7,
             max_tokens=1500
@@ -205,23 +162,31 @@ class SmartResearcher:
         return response.choices[0].message.content
 
     async def get_image_for_topic(self, topic: str) -> str | None:
-        """Mavzu uchun rasm URL olish (Unsplash)"""
+        """Mavzu uchun rasm URL olish"""
         try:
             # Kalit so'z olish
             response = await self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": IMAGE_SEARCH_PROMPT},
+                    {"role": "system",
+                     "content": "Rasm qidirish uchun 1-2 so'zlik inglizcha kalit so'z ber. Faqat so'zni yoz, boshqa hech narsa yozma."},
                     {"role": "user", "content": topic}
                 ],
-                max_tokens=20
+                max_tokens=10
             )
-            keyword = response.choices[0].message.content.strip()
+            keyword = response.choices[0].message.content.strip().replace(" ", "-")
 
-            # Unsplash'dan rasm olish (API key kerak emas)
-            unsplash_url = f"https://source.unsplash.com/800x600/?{keyword.replace(' ', ',')}"
+            # Picsum - ishonchli bepul rasm
+            random_id = random.randint(1, 1000)
+            image_url = f"https://picsum.photos/seed/{keyword}{random_id}/800/600"
 
-            return unsplash_url
+            # URL ishlashini tekshirish
+            async with aiohttp.ClientSession() as session:
+                async with session.get(image_url, allow_redirects=True) as resp:
+                    if resp.status == 200:
+                        return str(resp.url)
+
+            return None
 
         except Exception as e:
             print(f"Rasm olishda xatolik: {e}")
@@ -234,15 +199,12 @@ class SmartResearcher:
         research = await self.search_and_analyze(topic)
 
         if research["status"] != "success":
-            return {
-                "success": False,
-                "error": "Qidirishda xatolik yuz berdi"
-            }
+            return {"success": False, "error": research.get("error", "Qidirishda xatolik")}
 
         # 2. Post yaratish
         post = await self.generate_post(research, post_type)
 
-        # 3. Rasm olish (agar kerak bo'lsa)
+        # 3. Rasm olish
         image_url = None
         if with_image:
             image_url = await self.get_image_for_topic(topic)
@@ -258,9 +220,7 @@ class SmartResearcher:
     async def compare_topics(self, topic1: str, topic2: str) -> dict:
         """Ikki mavzuni solishtirish"""
 
-        combined_query = f"{topic1} vs {topic2} comparison differences advantages"
-
-        research = await self.search_and_analyze(combined_query)
+        research = await self.search_and_analyze(f"{topic1} vs {topic2} comparison advantages disadvantages")
 
         if research["status"] != "success":
             return {"success": False, "error": "Qidirishda xatolik"}
@@ -277,17 +237,15 @@ class SmartResearcher:
 
     async def quick_post(self, topic: str) -> dict:
         """Tezkor qisqa post"""
-        return await self.full_research(topic, "quick")
+        return await self.full_research(topic, "quick", with_image=False)
 
-    async def get_trending(self, category: str = "tech") -> dict:
+    async def get_trending(self) -> dict:
         """Trendlar ro'yxati"""
 
-        query = f"trending {category} news today 2024 2025"
-
-        research = await self.search_and_analyze(query)
+        research = await self.search_and_analyze("trending tech AI programming news today 2024 2025")
 
         if research["status"] != "success":
-            return {"success": False, "error": "Xatolik"}
+            return {"success": False, "error": "Qidirishda xatolik"}
 
         post = await self.generate_post(research, "trending")
 
