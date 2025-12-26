@@ -6,6 +6,7 @@ import asyncio
 import logging
 import json
 import os
+import re
 from aiogram import Router, types, F, Bot
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -60,6 +61,28 @@ def save_settings(settings: dict):
         logger.error(f"Sozlamalarni saqlashda xato: {e}")
 
 
+def sanitize_html(text: str) -> str:
+    """HTML teglarini tozalash va to'g'rilash"""
+    if not text:
+        return text
+
+    # Ochiq teglarni yopish
+    tags = ['b', 'i', 'code', 'pre', 'a']
+
+    for tag in tags:
+        # Ochiq teglar soni
+        open_count = len(re.findall(f'<{tag}[^>]*>', text, re.IGNORECASE))
+        # Yopiq teglar soni
+        close_count = len(re.findall(f'</{tag}>', text, re.IGNORECASE))
+
+        # Agar ochiq ko'p bo'lsa, yopamiz
+        while open_count > close_count:
+            text += f'</{tag}>'
+            close_count += 1
+
+    return text
+
+
 # ============ STATES ============
 
 class EditStates(StatesGroup):
@@ -77,17 +100,20 @@ async def send_to_channel(bot: Bot, text: str, image_url: str = None) -> bool:
             logger.warning("CHANNEL_USERNAME sozlanmagan!")
             return False
 
+        # HTML ni tozalash
+        clean_text = sanitize_html(text)
+
         if image_url:
             await bot.send_photo(
                 chat_id=CHANNEL_USERNAME,
                 photo=image_url,
-                caption=text[:1024],
+                caption=clean_text[:1024],
                 parse_mode="HTML"
             )
         else:
             await bot.send_message(
                 chat_id=CHANNEL_USERNAME,
-                text=text,
+                text=clean_text,
                 parse_mode="HTML"
             )
 
@@ -228,7 +254,7 @@ async def cmd_settimes(message: types.Message, state: FSMContext):
         f"⏰ <b>Vaqtlarni sozlash</b>\n\n"
         f"Hozirgi vaqtlar:\n<code>{current}</code>\n\n"
         f"Yangi vaqtlarni yozing (vergul bilan ajratib):\n\n"
-        f"<i>Misol:</i> <code>09:00, 13:00, 18:00, 21:00</code>\n\n"
+        f"Misol: <code>09:00, 13:00, 18:00, 21:00</code>\n\n"
         f"❌ Bekor qilish: /cancel",
         parse_mode="HTML"
     )
@@ -243,10 +269,8 @@ async def process_settimes(message: types.Message, state: FSMContext):
         return
 
     try:
-        # Vaqtlarni parse qilish
         times = [t.strip() for t in message.text.split(",")]
 
-        # Validatsiya
         valid_times = []
         for t in times:
             if ":" not in t:
@@ -261,7 +285,6 @@ async def process_settimes(message: types.Message, state: FSMContext):
 
             valid_times.append(f"{hour:02d}:{minute:02d}")
 
-        # Saqlash
         settings = load_settings()
         settings["post_times"] = valid_times
         save_settings(settings)
@@ -295,7 +318,7 @@ async def cmd_settopics(message: types.Message, state: FSMContext):
         f"Hozirgi mavzular:\n<code>{current}</code>\n\n"
         f"Yangi mavzularni yozing.\n"
         f"Har bir qator - bitta mavzu:\n\n"
-        f"<i>Misol:</i>\n"
+        f"Misol:\n"
         f"<code>AI sun'iy intellekt\n"
         f"Python dasturlash\n"
         f"JavaScript React Vue\n"
@@ -313,14 +336,12 @@ async def process_settopics(message: types.Message, state: FSMContext):
         await message.answer("❌ Bekor qilindi")
         return
 
-    # Mavzularni parse qilish
     topics = [t.strip() for t in message.text.split("\n") if t.strip()]
 
     if not topics:
         await message.answer("❌ Kamida 1 ta mavzu kiriting!")
         return
 
-    # Saqlash
     settings = load_settings()
     settings["topics"] = topics
     save_settings(settings)
@@ -356,7 +377,6 @@ async def cmd_research(message: types.Message):
     )
 
     try:
-        # Status yangilash
         await asyncio.sleep(2)
         await status_msg.edit_text(
             f"🔍 <b>Mavzu:</b> {topic}\n\n"
@@ -364,38 +384,34 @@ async def cmd_research(message: types.Message):
             parse_mode="HTML"
         )
 
-        # Tadqiqot
         result = await researcher.full_research(topic, with_image=True)
 
         if not result["success"]:
             await status_msg.edit_text(
-                f"❌ <b>Xatolik:</b> {result.get('error', 'Noma`lum xato')}",
+                f"❌ <b>Xatolik:</b> {result.get('error', 'Nomalum xato')}",
                 parse_mode="HTML"
             )
             return
 
-        # Status yangilash
         await status_msg.edit_text(
             f"🔍 <b>Mavzu:</b> {topic}\n\n"
             f"🧠 Post yozilmoqda...",
             parse_mode="HTML"
         )
 
-        post = result["post"]
+        post = sanitize_html(result["post"])
 
-        # Uzunlikni tekshirish
         if len(post) > MAX_POST_LENGTH:
-            post = post[:MAX_POST_LENGTH] + "\n\n<i>...(davomi kesildi)</i>"
+            post = post[:MAX_POST_LENGTH] + "\n\n...(davomi kesildi)"
 
-        # Saqlash
         post_id = str(message.message_id)
         temp_posts[post_id] = {
             "topic": topic,
             "post": post,
-            "image_url": result.get("image_url")
+            "image_url": result.get("image_url"),
+            "has_image": bool(result.get("image_url"))
         }
 
-        # Natijani yuborish
         if result.get("image_url"):
             await status_msg.delete()
             await message.answer_photo(
@@ -449,7 +465,6 @@ async def cmd_publish(message: types.Message, bot: Bot):
             )
             return
 
-        # Kanalga yuborish
         success = await send_to_channel(bot, result["post"], result.get("image_url"))
 
         if success:
@@ -493,14 +508,16 @@ async def cmd_quick(message: types.Message):
         result = await researcher.quick_post(topic)
 
         if result["success"]:
+            post = sanitize_html(result["post"])
             post_id = str(message.message_id)
             temp_posts[post_id] = {
                 "topic": topic,
-                "post": result["post"]
+                "post": post,
+                "has_image": False
             }
 
             await status_msg.edit_text(
-                f"⚡ <b>Tezkor post:</b>\n\n{result['post']}",
+                f"⚡ <b>Tezkor post:</b>\n\n{post}",
                 parse_mode="HTML",
                 reply_markup=get_post_keyboard(post_id)
             )
@@ -544,14 +561,16 @@ async def cmd_compare(message: types.Message):
         result = await researcher.compare_topics(topic1, topic2)
 
         if result["success"]:
+            post = sanitize_html(result["post"])
             post_id = str(message.message_id)
             temp_posts[post_id] = {
                 "topic": f"{topic1} vs {topic2}",
-                "post": result["post"]
+                "post": post,
+                "has_image": False
             }
 
             await status_msg.edit_text(
-                result["post"],
+                post,
                 parse_mode="HTML",
                 reply_markup=get_post_keyboard(post_id)
             )
@@ -573,13 +592,15 @@ async def cmd_trending(message: types.Message):
         result = await researcher.get_trending()
 
         if result["success"]:
+            post = sanitize_html(result["post"])
             temp_posts["trending"] = {
                 "topic": "Bugungi trendlar",
-                "post": result["post"]
+                "post": post,
+                "has_image": False
             }
 
             await status_msg.edit_text(
-                result["post"],
+                post,
                 parse_mode="HTML",
                 reply_markup=get_post_keyboard("trending")
             )
@@ -608,7 +629,18 @@ async def callback_publish(callback: types.CallbackQuery, bot: Bot):
     success = await send_to_channel(bot, data["post"], data.get("image_url"))
 
     if success:
-        await callback.message.edit_reply_markup(reply_markup=None)
+        # Tugmalarni olib tashlash
+        try:
+            if data.get("has_image"):
+                await callback.message.edit_caption(
+                    caption=callback.message.caption,
+                    reply_markup=None
+                )
+            else:
+                await callback.message.edit_reply_markup(reply_markup=None)
+        except:
+            pass
+
         await callback.message.answer(
             f"✅ <b>Post kanalga yuborildi!</b>\n"
             f"📢 {CHANNEL_USERNAME}",
@@ -632,26 +664,39 @@ async def callback_regenerate(callback: types.CallbackQuery):
         return
 
     topic = temp_posts[post_id]["topic"]
+    has_image = temp_posts[post_id].get("has_image", False)
 
-    await callback.answer("🔄 Qayta yozilmoqda...")
+    await callback.answer("🔄 Qayta yozilmoqda... (15-20 soniya)")
 
     try:
-        result = await researcher.full_research(topic, with_image=True)
+        result = await researcher.full_research(topic, with_image=False)
 
         if result["success"]:
-            temp_posts[post_id]["post"] = result["post"]
-            temp_posts[post_id]["image_url"] = result.get("image_url")
+            post = sanitize_html(result["post"])
+            temp_posts[post_id]["post"] = post
 
-            await callback.message.edit_text(
-                f"✅ <b>Qayta yozildi!</b>\n\n{result['post']}",
-                parse_mode="HTML",
-                reply_markup=get_post_keyboard(post_id)
-            )
+            # Rasmli post bo'lsa, caption ni o'zgartirish
+            if has_image:
+                await callback.message.edit_caption(
+                    caption=f"✅ <b>Qayta yozildi!</b>\n\n{post[:900]}",
+                    parse_mode="HTML",
+                    reply_markup=get_post_keyboard(post_id)
+                )
+            else:
+                await callback.message.edit_text(
+                    f"✅ <b>Qayta yozildi!</b>\n\n{post}",
+                    parse_mode="HTML",
+                    reply_markup=get_post_keyboard(post_id)
+                )
         else:
             await callback.answer("❌ Xatolik yuz berdi", show_alert=True)
 
     except Exception as e:
-        await callback.answer(f"❌ Xatolik: {str(e)}", show_alert=True)
+        logger.error(f"Regenerate xatolik: {e}")
+        try:
+            await callback.answer(f"❌ Xatolik!", show_alert=True)
+        except:
+            pass
 
 
 # ============ CALLBACK: Bekor qilish ============
@@ -660,12 +705,15 @@ async def callback_regenerate(callback: types.CallbackQuery):
 async def callback_cancel(callback: types.CallbackQuery):
     post_id = callback.data.split(":")[1]
 
-    # Vaqtinchalik postdan o'chirish
     if post_id in temp_posts:
         del temp_posts[post_id]
 
     await callback.answer("❌ Bekor qilindi")
-    await callback.message.delete()
+
+    try:
+        await callback.message.delete()
+    except:
+        pass
 
 
 # ============ CALLBACK: Tahrirlash ============
@@ -685,7 +733,7 @@ async def callback_edit(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "✏️ <b>Tahrirlash</b>\n\n"
         "Nimani o'zgartirmoqchisiz? Yozing:\n\n"
-        "<i>Misollar:</i>\n"
+        "Misollar:\n"
         "• Sarlavhani qisqartir\n"
         "• Ko'proq emoji qo'sh\n"
         "• Rasmiyroq qil\n"
@@ -725,7 +773,7 @@ async def process_edit(message: types.Message, state: FSMContext):
             messages=[
                 {
                     "role": "system",
-                    "content": "Sen matn tahrirlovchisisan. Postni so'rov bo'yicha tahrirlash. HTML formatni saqlash (<b>, <i>, <code>). Faqat tahrirlangan postni qaytar, boshqa hech narsa yozma."
+                    "content": "Sen matn tahrirlovchisisan. Postni so'rov bo'yicha tahrirlash. HTML formatni to'g'ri saqlash - har bir ochilgan teg yopilishi kerak (<b></b>, <i></i>, <code></code>). Faqat tahrirlangan postni qaytar, boshqa hech narsa yozma."
                 },
                 {
                     "role": "user",
@@ -735,7 +783,7 @@ async def process_edit(message: types.Message, state: FSMContext):
             temperature=0.7
         )
 
-        edited_post = response.choices[0].message.content
+        edited_post = sanitize_html(response.choices[0].message.content)
         temp_posts[post_id]["post"] = edited_post
 
         await status_msg.edit_text(
