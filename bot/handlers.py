@@ -1,22 +1,57 @@
 import asyncio
-from aiogram import Router, types, F
+import logging
+from aiogram import Router, types, F, Bot
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from core import SmartResearcher
-from config import CHANNEL_USERNAME, MAX_POST_LENGTH
-from .keyboards import get_post_keyboard, get_confirm_keyboard, get_category_keyboard
+from config import CHANNEL_USERNAME, MAX_POST_LENGTH, ADMIN_ID
+from .keyboards import get_post_keyboard, get_confirm_keyboard
 
 router = Router()
 researcher = SmartResearcher()
+logger = logging.getLogger(__name__)
 
-# Vaqtinchalik post saqlash (keyinchalik Redis/DB ga o'tkazish mumkin)
+# Vaqtinchalik post saqlash
 temp_posts = {}
 
 
 class EditStates(StatesGroup):
     waiting_for_edit = State()
+
+
+# ============ YORDAMCHI FUNKSIYALAR ============
+
+async def send_to_channel(bot: Bot, text: str, image_url: str = None) -> bool:
+    """Kanalga post yuborish"""
+    try:
+        if not CHANNEL_USERNAME:
+            logger.warning("⚠️ CHANNEL_USERNAME sozlanmagan!")
+            return False
+
+        if image_url:
+            # Rasm bilan yuborish
+            await bot.send_photo(
+                chat_id=CHANNEL_USERNAME,
+                photo=image_url,
+                caption=text[:1024],  # Caption limit 1024
+                parse_mode="HTML"
+            )
+        else:
+            # Faqat matn
+            await bot.send_message(
+                chat_id=CHANNEL_USERNAME,
+                text=text,
+                parse_mode="HTML"
+            )
+
+        logger.info(f"✅ Post kanalga yuborildi: {CHANNEL_USERNAME}")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ Kanalga yuborishda xatolik: {e}")
+        return False
 
 
 # ============ START ============
@@ -26,11 +61,13 @@ async def cmd_start(message: types.Message):
         "👋 <b>Salom! Men Smart Research Botman.</b>\n\n"
         "Men internetdan ma'lumot qidirib, Telegram uchun tayyor post yozib beraman.\n\n"
         "📌 <b>Buyruqlar:</b>\n"
-        "/research [mavzu] - To'liq tadqiqot va post\n"
-        "/quick [mavzu] - Tezkor qisqa post\n"
-        "/compare [A] vs [B] - Solishtirish\n"
-        "/trending - Bugungi trendlar\n"
-        "/help - Yordam\n\n"
+        "<code>/research [mavzu]</code> - To'liq tadqiqot va post\n"
+        "<code>/quick [mavzu]</code> - Tezkor qisqa post\n"
+        "<code>/compare [A] vs [B]</code> - Solishtirish\n"
+        "<code>/trending</code> - Bugungi trendlar\n"
+        "<code>/publish [mavzu]</code> - To'g'ridan-to'g'ri kanalga\n"
+        "<code>/schedule</code> - Jadval sozlamalari\n"
+        "<code>/help</code> - Yordam\n\n"
         "💡 <b>Misol:</b> <code>/research React 19 yangiliklari</code>",
         parse_mode="HTML"
     )
@@ -53,12 +90,15 @@ async def cmd_help(message: types.Message):
         "<b>4. Trendlar:</b>\n"
         "<code>/trending</code>\n"
         "Bugungi IT trendlari.\n\n"
-        "❓ Savollar bo'lsa: @admin_username",
+        "<b>5. Kanalga yuborish:</b>\n"
+        "<code>/publish AI yangiliklari</code>\n"
+        "Rasm bilan to'g'ridan-to'g'ri kanalga.\n\n"
+        "❓ Savollar: @admin_username",
         parse_mode="HTML"
     )
 
 
-# ============ RESEARCH (Asosiy) ============
+# ============ RESEARCH ============
 @router.message(Command("research"))
 async def cmd_research(message: types.Message):
     topic = message.text.replace("/research", "").strip()
@@ -71,7 +111,6 @@ async def cmd_research(message: types.Message):
         )
         return
 
-    # Status xabari
     status_msg = await message.answer(
         f"🔍 <b>Qidirilmoqda:</b> {topic}\n\n"
         "⏳ Internetdan ma'lumot yig'ilmoqda...",
@@ -79,22 +118,19 @@ async def cmd_research(message: types.Message):
     )
 
     try:
-        # Status yangilash
         await asyncio.sleep(1)
         await status_msg.edit_text(
             f"🔍 <b>Mavzu:</b> {topic}\n\n"
-            "📖 Maqolalar o'qilmoqda...",
+            "📖 Maqolalar tahlil qilinmoqda...",
             parse_mode="HTML"
         )
 
-        # Tadqiqot
-        result = await researcher.full_research(topic)
+        result = await researcher.full_research(topic, with_image=True)
 
         if not result["success"]:
             await status_msg.edit_text(f"❌ Xatolik: {result.get('error', 'Nomalum xato')}")
             return
 
-        # Status yangilash
         await status_msg.edit_text(
             f"🔍 <b>Mavzu:</b> {topic}\n\n"
             "🧠 Post yozilmoqda...",
@@ -103,27 +139,87 @@ async def cmd_research(message: types.Message):
 
         post = result["post"]
 
-        # Post uzunligini tekshirish
         if len(post) > MAX_POST_LENGTH:
-            post = post[:MAX_POST_LENGTH] + "\n\n...(davomi kesildi)"
+            post = post[:MAX_POST_LENGTH] + "\n\n<i>...(davomi kesildi)</i>"
 
-        # Vaqtinchalik saqlash
         post_id = str(message.message_id)
         temp_posts[post_id] = {
             "topic": topic,
             "post": post,
-            "research": result["research"]
+            "research": result["research"],
+            "image_url": result.get("image_url")
         }
 
-        # Natijani ko'rsatish
-        await status_msg.edit_text(
-            f"✅ <b>Tayyor!</b>\n\n{post}",
-            parse_mode="HTML",
-            reply_markup=get_post_keyboard(post_id)
-        )
+        # Rasm bilan yuborish
+        if result.get("image_url"):
+            await message.answer_photo(
+                photo=result["image_url"],
+                caption=f"✅ <b>Tayyor!</b>\n\n{post[:900]}...",
+                parse_mode="HTML",
+                reply_markup=get_post_keyboard(post_id)
+            )
+            await status_msg.delete()
+        else:
+            await status_msg.edit_text(
+                f"✅ <b>Tayyor!</b>\n\n{post}",
+                parse_mode="HTML",
+                reply_markup=get_post_keyboard(post_id)
+            )
 
     except Exception as e:
+        logger.error(f"Research xatolik: {e}")
         await status_msg.edit_text(f"❌ Xatolik yuz berdi:\n<code>{str(e)}</code>", parse_mode="HTML")
+
+
+# ============ PUBLISH (to'g'ridan-to'g'ri kanalga) ============
+@router.message(Command("publish"))
+async def cmd_publish(message: types.Message, bot: Bot):
+    topic = message.text.replace("/publish", "").strip()
+
+    if not topic:
+        await message.answer(
+            "❌ Mavzuni yozing!\n\n"
+            "✅ Misol: <code>/publish AI yangiliklari</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    status_msg = await message.answer(
+        f"🚀 <b>Kanalga tayyorlanmoqda:</b> {topic}\n\n"
+        "⏳ Biroz kuting...",
+        parse_mode="HTML"
+    )
+
+    try:
+        result = await researcher.full_research(topic, with_image=True)
+
+        if not result["success"]:
+            await status_msg.edit_text("❌ Xatolik yuz berdi")
+            return
+
+        post = result["post"]
+        image_url = result.get("image_url")
+
+        # Kanalga yuborish
+        success = await send_to_channel(bot, post, image_url)
+
+        if success:
+            await status_msg.edit_text(
+                f"✅ <b>Post kanalga yuborildi!</b>\n\n"
+                f"📢 Kanal: {CHANNEL_USERNAME}\n"
+                f"📝 Mavzu: {topic}",
+                parse_mode="HTML"
+            )
+        else:
+            await status_msg.edit_text(
+                "❌ Kanalga yuborib bo'lmadi!\n\n"
+                "<i>Bot kanalda admin ekanligini tekshiring.</i>",
+                parse_mode="HTML"
+            )
+
+    except Exception as e:
+        logger.error(f"Publish xatolik: {e}")
+        await status_msg.edit_text(f"❌ Xatolik: {str(e)}")
 
 
 # ============ QUICK ============
@@ -161,7 +257,6 @@ async def cmd_quick(message: types.Message):
 async def cmd_compare(message: types.Message):
     text = message.text.replace("/compare", "").strip()
 
-    # "vs" bilan ajratish
     if " vs " not in text.lower():
         await message.answer(
             "❌ Noto'g'ri format!\n\n"
@@ -208,6 +303,8 @@ async def cmd_trending(message: types.Message):
         result = await researcher.get_trending()
 
         if result["success"]:
+            temp_posts["trending"] = {"topic": "trending", "post": result["post"]}
+
             await status_msg.edit_text(
                 result["post"],
                 parse_mode="HTML",
@@ -223,28 +320,28 @@ async def cmd_trending(message: types.Message):
 # ============ CALLBACK HANDLERS ============
 
 @router.callback_query(F.data.startswith("publish:"))
-async def callback_publish(callback: types.CallbackQuery):
-    await callback.answer()
-    await callback.message.edit_reply_markup(reply_markup=get_confirm_keyboard())
+async def callback_publish(callback: types.CallbackQuery, bot: Bot):
+    post_id = callback.data.split(":")[1]
 
+    if post_id in temp_posts:
+        post_data = temp_posts[post_id]
+        post = post_data["post"]
+        image_url = post_data.get("image_url")
 
-@router.callback_query(F.data == "confirm_publish")
-async def callback_confirm_publish(callback: types.CallbackQuery):
-    await callback.answer("✅ Post nashr qilindi!", show_alert=True)
+        await callback.answer("📤 Kanalga yuborilmoqda...")
 
-    # Tugmalarni olib tashlash
-    await callback.message.edit_reply_markup(reply_markup=None)
+        success = await send_to_channel(bot, post, image_url)
 
-    # TODO: Kanalga yuborish (CHANNEL_USERNAME mavjud bo'lsa)
-    # if CHANNEL_USERNAME:
-    #     await bot.send_message(CHANNEL_USERNAME, callback.message.text)
-
-
-@router.callback_query(F.data == "cancel_publish")
-async def callback_cancel_publish(callback: types.CallbackQuery):
-    await callback.answer("Bekor qilindi")
-    post_id = callback.message.message_id
-    await callback.message.edit_reply_markup(reply_markup=get_post_keyboard(str(post_id)))
+        if success:
+            await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.message.answer(
+                f"✅ <b>Post kanalga yuborildi!</b>\n📢 {CHANNEL_USERNAME}",
+                parse_mode="HTML"
+            )
+        else:
+            await callback.answer("❌ Yuborib bo'lmadi! Bot admin ekanligini tekshiring.", show_alert=True)
+    else:
+        await callback.answer("❌ Post topilmadi", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("regenerate:"))
@@ -255,11 +352,12 @@ async def callback_regenerate(callback: types.CallbackQuery):
         topic = temp_posts[post_id]["topic"]
         await callback.answer("🔄 Qayta yozilmoqda...")
 
-        # Yangi post
-        result = await researcher.full_research(topic)
+        result = await researcher.full_research(topic, with_image=True)
 
         if result["success"]:
             temp_posts[post_id]["post"] = result["post"]
+            temp_posts[post_id]["image_url"] = result.get("image_url")
+
             await callback.message.edit_text(
                 f"✅ <b>Qayta yozildi!</b>\n\n{result['post']}",
                 parse_mode="HTML",
@@ -303,7 +401,6 @@ async def process_edit(message: types.Message, state: FSMContext):
         status_msg = await message.answer("✏️ Tahrirlanmoqda...")
 
         try:
-            # OpenAI bilan tahrirlash
             from openai import AsyncOpenAI
             from config import OPENAI_API_KEY
 
@@ -313,7 +410,7 @@ async def process_edit(message: types.Message, state: FSMContext):
                 model="gpt-4o",
                 messages=[
                     {"role": "system",
-                     "content": "Sen matn tahrirlovchisisan. Postni so'rov bo'yicha tahrirlash. Formatni saqlash. Faqat tahrirlangan postni qaytar."},
+                     "content": "Sen matn tahrirlovchisisan. Postni so'rov bo'yicha tahrirlash. HTML formatni saqlash (<b>, <i>, <code>). Faqat tahrirlangan postni qaytar."},
                     {"role": "user", "content": f"POST:\n{original_post}\n\nSO'ROV: {edit_request}"}
                 ]
             )

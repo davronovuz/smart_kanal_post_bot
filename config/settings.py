@@ -13,3 +13,6 @@ CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "")
 MAX_SEARCH_RESULTS = 5
 MAX_POST_LENGTH = 4000
 DAILY_LIMIT = 20
+
+# Avtomatik posting (True/False)
+AUTO_POST_ENABLED = os.getenv("AUTO_POST_ENABLED", "True").lower() == "true"

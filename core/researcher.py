@@ -1,10 +1,11 @@
 """
 Smart Researcher - OpenAI bilan web search va post yaratish
-Faqat bitta API - OpenAI!
 """
 
 from openai import AsyncOpenAI
 from config import OPENAI_API_KEY
+import aiohttp
+import os
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
@@ -23,79 +24,108 @@ POST_SYSTEM_PROMPT = """Sen professional IT jurnalistsan va Telegram kanal yurit
 
 VAZIFA: Berilgan ma'lumotlar asosida o'zbek tilida professional post yoz.
 
-POST FORMATI:
-📱 [SARLAVHA - KATTA HARFDA, 5-8 so'z]
+POST FORMATI (Telegram HTML):
+<b>📱 SARLAVHA - KATTA HARFDA</b>
 
-[Kirish - 1-2 jumla, mavzuni tanishtirish]
+Kirish - 1-2 jumla, mavzuni tanishtirish.
 
-🔹 [Muhim nuqta 1 - aniq fakt]
-🔹 [Muhim nuqta 2 - aniq fakt]  
-🔹 [Muhim nuqta 3 - aniq fakt]
-[Agar kerak bo'lsa, yana 1-2 nuqta]
+🔹 <b>Muhim nuqta 1</b> - aniq fakt
+🔹 <b>Muhim nuqta 2</b> - aniq fakt  
+🔹 <b>Muhim nuqta 3</b> - aniq fakt
 
-💡 Xulosa: [Qisqa xulosa - 1-2 jumla]
+<i>💡 Xulosa: Qisqa xulosa - 1-2 jumla</i>
 
 ———
-📚 Manbalar:
-• [Manba 1 nomi]
-• [Manba 2 nomi]
+📚 <b>Manbalar:</b>
+- Manba 1 nomi
+- Manba 2 nomi
 
-#[teglar - 3-5 ta, vergulsiz]
+#hashtag1 #hashtag2 #hashtag3
+
+FORMATLASH QOIDALARI:
+1. <b>matn</b> - qalin (muhim so'zlar uchun)
+2. <i>matn</i> - kursiv (xulosa, izohlar uchun)
+3. <code>kod</code> - kod yoki buyruqlar uchun
+4. <pre>kod bloki</pre> - katta kod uchun
 
 QOIDALAR:
 1. O'zbek tilida yoz (texnik atamalar inglizcha bo'lishi mumkin)
 2. Sodda va tushunarli til
-3. Faqat berilgan faktlarga asoslan, o'zing to'qima
-4. 150-250 so'z oralig'ida
-5. Emoji kam ishlat, ortiqcha emas
-6. Hashtaglar tegishli bo'lsin (#python #react #ai kabi)
+3. Faqat berilgan faktlarga asoslan
+4. 150-300 so'z oralig'ida
+5. Kod bo'lsa <code> ichida yoz
+6. Hashtaglar tegishli bo'lsin
 """
 
 COMPARE_SYSTEM_PROMPT = """Sen texnologiya ekspertisan.
 
 VAZIFA: Ikki texnologiyani solishtirish va Telegram uchun post yozish.
 
-FORMAT:
-⚔️ [TEXNOLOGIYA1] vs [TEXNOLOGIYA2]
+FORMAT (Telegram HTML):
+<b>⚔️ TEXNOLOGIYA1 vs TEXNOLOGIYA2</b>
 
-[Kirish - nima uchun solishtirmoqdamiz]
+Kirish - nima uchun solishtirmoqdamiz.
 
-📊 Solishtirish:
+<b>📊 Solishtirish:</b>
 
-✅ [Texnologiya1] afzalliklari:
-• [Afzallik 1]
-• [Afzallik 2]
+<b>✅ Texnologiya1 afzalliklari:</b>
+- Afzallik 1
+- Afzallik 2
 
-✅ [Texnologiya2] afzalliklari:
-• [Afzallik 1]
-• [Afzallik 2]
+<b>✅ Texnologiya2 afzalliklari:</b>
+- Afzallik 1
+- Afzallik 2
 
-🎯 Qachon qaysi birini tanlash kerak:
-• [Holat 1] → [Tanlash]
-• [Holat 2] → [Tanlash]
+<b>🎯 Qachon qaysi birini tanlash kerak:</b>
+- <i>Holat 1</i> → Tanlash
+- <i>Holat 2</i> → Tanlash
 
-💡 Xulosa: [Qisqa tavsiya]
+<i>💡 Xulosa: Qisqa tavsiya</i>
 
-#[teglar]
+#hashtag1 #hashtag2
 """
 
 QUICK_SYSTEM_PROMPT = """Sen IT blogger san.
 
 VAZIFA: Berilgan mavzu haqida qisqa, lo'nda post yoz.
 
-FORMAT:
-⚡ [SARLAVHA]
+FORMAT (Telegram HTML):
+<b>⚡ SARLAVHA</b>
 
-[Asosiy ma'lumot - 2-3 jumla]
+Asosiy ma'lumot - 2-3 jumla.
 
-🔗 Batafsil: [manba]
+🔗 <i>Batafsil: manba</i>
 
-#[2-3 hashtag]
+#hashtag1 #hashtag2
+"""
 
-QOIDALAR:
-- Maksimum 100 so'z
-- Faqat eng muhim fakt
-- Tez o'qilsin
+TRENDING_SYSTEM_PROMPT = """Sen IT yangiliklar tahlilchisisan.
+
+FORMAT (Telegram HTML):
+<b>🔥 BUGUNGI IT TRENDLAR</b>
+
+1️⃣ <b>Trend 1</b>
+   └ <i>Qisqa izoh</i>
+
+2️⃣ <b>Trend 2</b>
+   └ <i>Qisqa izoh</i>
+
+3️⃣ <b>Trend 3</b>
+   └ <i>Qisqa izoh</i>
+
+4️⃣ <b>Trend 4</b>
+   └ <i>Qisqa izoh</i>
+
+5️⃣ <b>Trend 5</b>
+   └ <i>Qisqa izoh</i>
+
+#trending #tech #news
+"""
+
+# Rasm qidirish uchun prompt
+IMAGE_SEARCH_PROMPT = """Berilgan mavzu uchun rasm qidirish uchun ingliz tilida 2-3 so'zlik kalit so'z ber.
+Faqat kalit so'zni yoz, boshqa hech narsa yozma.
+Masalan: "React 19" uchun → "React logo programming"
 """
 
 
@@ -104,13 +134,10 @@ class SmartResearcher:
 
     def __init__(self):
         self.client = client
-        self.model = "gpt-4o"  # Eng yaxshi model
+        self.model = "gpt-4o"
 
     async def search_and_analyze(self, query: str) -> dict:
-        """
-        Internetdan qidirish va ma'lumot yig'ish
-        OpenAI web_search toolidan foydalanadi
-        """
+        """Internetdan qidirish va ma'lumot yig'ish"""
 
         response = await self.client.responses.create(
             model=self.model,
@@ -147,15 +174,14 @@ class SmartResearcher:
         }
 
     async def generate_post(self, research_data: dict, post_type: str = "full") -> str:
-        """
-        Tadqiqot natijalariga asoslangan post yaratish
-        """
+        """Tadqiqot natijalariga asoslangan post yaratish"""
 
-        # Post turiga qarab prompt tanlash
         if post_type == "compare":
             system_prompt = COMPARE_SYSTEM_PROMPT
         elif post_type == "quick":
             system_prompt = QUICK_SYSTEM_PROMPT
+        elif post_type == "trending":
+            system_prompt = TRENDING_SYSTEM_PROMPT
         else:
             system_prompt = POST_SYSTEM_PROMPT
 
@@ -178,10 +204,31 @@ class SmartResearcher:
 
         return response.choices[0].message.content
 
-    async def full_research(self, topic: str, post_type: str = "full") -> dict:
-        """
-        To'liq jarayon: qidirish + post yaratish
-        """
+    async def get_image_for_topic(self, topic: str) -> str | None:
+        """Mavzu uchun rasm URL olish (Unsplash)"""
+        try:
+            # Kalit so'z olish
+            response = await self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": IMAGE_SEARCH_PROMPT},
+                    {"role": "user", "content": topic}
+                ],
+                max_tokens=20
+            )
+            keyword = response.choices[0].message.content.strip()
+
+            # Unsplash'dan rasm olish (API key kerak emas)
+            unsplash_url = f"https://source.unsplash.com/800x600/?{keyword.replace(' ', ',')}"
+
+            return unsplash_url
+
+        except Exception as e:
+            print(f"Rasm olishda xatolik: {e}")
+            return None
+
+    async def full_research(self, topic: str, post_type: str = "full", with_image: bool = False) -> dict:
+        """To'liq jarayon: qidirish + post yaratish"""
 
         # 1. Internetdan qidirish
         research = await self.search_and_analyze(topic)
@@ -195,27 +242,28 @@ class SmartResearcher:
         # 2. Post yaratish
         post = await self.generate_post(research, post_type)
 
+        # 3. Rasm olish (agar kerak bo'lsa)
+        image_url = None
+        if with_image:
+            image_url = await self.get_image_for_topic(topic)
+
         return {
             "success": True,
             "topic": topic,
             "research": research["research"],
-            "post": post
+            "post": post,
+            "image_url": image_url
         }
 
     async def compare_topics(self, topic1: str, topic2: str) -> dict:
-        """
-        Ikki mavzuni solishtirish
-        """
+        """Ikki mavzuni solishtirish"""
 
         combined_query = f"{topic1} vs {topic2} comparison differences advantages"
 
         research = await self.search_and_analyze(combined_query)
 
         if research["status"] != "success":
-            return {
-                "success": False,
-                "error": "Qidirishda xatolik"
-            }
+            return {"success": False, "error": "Qidirishda xatolik"}
 
         research["query"] = f"{topic1} vs {topic2}"
         post = await self.generate_post(research, "compare")
@@ -228,55 +276,22 @@ class SmartResearcher:
         }
 
     async def quick_post(self, topic: str) -> dict:
-        """
-        Tezkor qisqa post
-        """
+        """Tezkor qisqa post"""
         return await self.full_research(topic, "quick")
 
     async def get_trending(self, category: str = "tech") -> dict:
-        """
-        Trendlar ro'yxati
-        """
+        """Trendlar ro'yxati"""
 
-        query = f"trending {category} news today 2024"
+        query = f"trending {category} news today 2024 2025"
 
         research = await self.search_and_analyze(query)
 
         if research["status"] != "success":
             return {"success": False, "error": "Xatolik"}
 
-        # Maxsus trending prompt
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": """Sen IT yangiliklar tahlilchisisan.
-
-FORMAT:
-🔥 BUGUNGI TRENDLAR
-
-1️⃣ [Trend 1]
-   └ [Qisqa izoh]
-
-2️⃣ [Trend 2]
-   └ [Qisqa izoh]
-
-3️⃣ [Trend 3]
-   └ [Qisqa izoh]
-
-4️⃣ [Trend 4]
-   └ [Qisqa izoh]
-
-5️⃣ [Trend 5]
-   └ [Qisqa izoh]
-
-#trending #tech #news
-"""},
-                {"role": "user", "content": research["research"]}
-            ],
-            temperature=0.7
-        )
+        post = await self.generate_post(research, "trending")
 
         return {
             "success": True,
-            "post": response.choices[0].message.content
+            "post": post
         }
