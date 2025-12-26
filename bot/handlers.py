@@ -357,7 +357,6 @@ async def process_settopics(message: types.Message, state: FSMContext):
 
 
 # ============ /research ============
-
 @router.message(Command("research"))
 async def cmd_research(message: types.Message):
     topic = message.text.replace("/research", "").strip()
@@ -413,27 +412,33 @@ async def cmd_research(message: types.Message):
         }
 
         if result.get("image_url"):
-            await status_msg.delete()
+            try:
+                await status_msg.delete()
+            except:
+                pass
             await message.answer_photo(
                 photo=result["image_url"],
                 caption=f"✅ <b>Tayyor!</b>\n\n{post[:900]}",
                 parse_mode="HTML",
                 reply_markup=get_post_keyboard(post_id)
             )
-        else:
-            await status_msg.edit_text(
-                f"✅ <b>Tayyor!</b>\n\n{post}",
-                parse_mode="HTML",
-                reply_markup=get_post_keyboard(post_id)
-            )
+            return
+
+        await status_msg.edit_text(
+            f"✅ <b>Tayyor!</b>\n\n{post}",
+            parse_mode="HTML",
+            reply_markup=get_post_keyboard(post_id)
+        )
 
     except Exception as e:
         logger.error(f"Research xatolik: {e}")
-        await status_msg.edit_text(
-            f"❌ <b>Xatolik yuz berdi:</b>\n<code>{str(e)}</code>",
-            parse_mode="HTML"
-        )
-
+        try:
+            await status_msg.edit_text(
+                f"❌ <b>Xatolik yuz berdi:</b>\n<code>{str(e)}</code>",
+                parse_mode="HTML"
+            )
+        except:
+            pass
 
 # ============ /publish ============
 
