@@ -91,7 +91,7 @@ async def cmd_research(message: types.Message):
         result = await researcher.full_research(topic)
 
         if not result["success"]:
-            await status_msg.edit_text(f"❌ Xatolik: {result.get('error', 'Noma\'lum xato')}")
+            await status_msg.edit_text(f"❌ Xatolik: {result.get('error', 'Nomalum xato')}")
             return
 
         # Status yangilash
